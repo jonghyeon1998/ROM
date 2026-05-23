@@ -1,0 +1,10 @@
+.DS_Store
+__pycache__/
+*.pyc
+.DS_Store
+__pycache__/
+*.pyc
+archived_experiments/heat_*
+archived_experiments/temp_FDM
+archived_experiments/mesh_points
+archived_experiments/points

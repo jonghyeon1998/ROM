@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
+from typing import Tuple, Union
 
 import torch
 
@@ -20,13 +22,24 @@ class BurgersCNConfig:
 @dataclass
 class AllenCahnCNConfig:
     epsilon: float = 1e-2
-    domain_length: float = 2.0 * torch.pi
+    domain_length: float = 2.0 * math.pi
     nx: int = 61
     ny: int = 61
     dt: float = 1e-2
     tmax: float = 5.0
     newton_tol: float = 1e-10
     newton_max_iter: int = 25
+
+
+@dataclass
+class NSVorticityConfig:
+    nx: int = 24
+    domain_length: float = math.pi
+    dt: float = 1e-2
+    tmax: float = 1.0
+    viscosity: float = 1e-3
+    modes: int = 6
+    snapshot_stride: int = 1
 
 
 def generate_burgers_initial_condition(
@@ -43,7 +56,7 @@ def generate_burgers_initial_condition(
     return amplitude * u0 / scale
 
 
-def _burgers_operators(config: BurgersCNConfig, dtype: torch.dtype, device: torch.device) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+def _burgers_operators(config: BurgersCNConfig, dtype: torch.dtype, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     x = torch.linspace(config.x_start, config.x_end, config.nx, dtype=dtype, device=device)
     dx = x[1] - x[0]
     n_int = config.nx - 2
@@ -66,7 +79,7 @@ def _burgers_residual_and_jacobian(
     d1: torch.Tensor,
     d2: torch.Tensor,
     config: BurgersCNConfig,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> Tuple[torch.Tensor, torch.Tensor]:
     adv_prev = u_prev * (d1.matmul(u_prev))
     adv_next = u_next * (d1.matmul(u_next))
     diff_prev = config.viscosity * d2.matmul(u_prev)
@@ -82,7 +95,7 @@ def _burgers_residual_and_jacobian(
 def burgers_crank_nicolson_rollout(
     initial_condition: torch.Tensor,
     config: BurgersCNConfig,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     dtype = initial_condition.dtype
     device = initial_condition.device
     x, d1, d2 = _burgers_operators(config, dtype=dtype, device=device)
@@ -99,7 +112,7 @@ def burgers_crank_nicolson_rollout(
         full[1:-1] = interior_state
         return full
 
-    def derivative_fields(interior_state: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def derivative_fields(interior_state: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         full = reconstruct(interior_state)
         grad = torch.zeros_like(full)
         grad[1:-1] = d1.matmul(interior_state)
@@ -131,8 +144,8 @@ def burgers_crank_nicolson_dataset(
     num_terms: int = 4,
     amplitude: float = 0.5,
     dtype: torch.dtype = torch.float64,
-    device: torch.device | str = "cpu",
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    device: Union[torch.device, str] = 'cpu',
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     x = torch.linspace(config.x_start, config.x_end, config.nx, dtype=dtype, device=device)
     n_steps = int(round(config.tmax / config.dt)) + 1
     solutions = torch.zeros((num_samples, config.nx, n_steps), dtype=dtype, device=device)
@@ -185,7 +198,7 @@ def _allen_cahn_laplacian_matrix(config: AllenCahnCNConfig, dtype: torch.dtype, 
 def solve_allen_cahn_crank_nicolson(
     initial_condition: torch.Tensor,
     config: AllenCahnCNConfig,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> Tuple[torch.Tensor, torch.Tensor]:
     dtype = initial_condition.dtype
     device = initial_condition.device
     nx_int = config.nx - 2
@@ -245,7 +258,7 @@ def solve_allen_cahn_crank_nicolson(
 def build_allen_cahn_flattened_coordinates(config: AllenCahnCNConfig) -> torch.Tensor:
     x = torch.linspace(0.0, float(config.domain_length), config.nx, dtype=torch.float64)
     y = torch.linspace(0.0, float(config.domain_length), config.ny, dtype=torch.float64)
-    x_grid, y_grid = torch.meshgrid(x, y, indexing="xy")
+    x_grid, y_grid = torch.meshgrid(x, y, indexing='xy')
 
     interior = torch.stack([x_grid[1:-1, 1:-1].reshape(-1), y_grid[1:-1, 1:-1].reshape(-1)], dim=1)
     top = torch.stack([x_grid[0, :], y_grid[0, :]], dim=1)
@@ -253,3 +266,159 @@ def build_allen_cahn_flattened_coordinates(config: AllenCahnCNConfig) -> torch.T
     left = torch.stack([x_grid[1:-1, 0], y_grid[1:-1, 0]], dim=1)
     right = torch.stack([x_grid[1:-1, -1], y_grid[1:-1, -1]], dim=1)
     return torch.cat([interior, top, bottom, left, right], dim=0)
+
+
+def ns_vorticity_grid(
+    config: NSVorticityConfig,
+    dtype: torch.dtype = torch.float64,
+    device: Union[torch.device, str] = 'cpu',
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    x = torch.arange(config.nx, dtype=dtype, device=device) * (config.domain_length / config.nx)
+    x_grid, y_grid = torch.meshgrid(x, x, indexing='xy')
+    points = torch.stack([x_grid.reshape(-1), y_grid.reshape(-1)], dim=1)
+    return points, x
+
+
+def _ns_spectral_operators(
+    config: NSVorticityConfig,
+    dtype: torch.dtype,
+    device: Union[torch.device, str],
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    freq = torch.fft.fftfreq(config.nx, d=config.domain_length / config.nx).to(device=device, dtype=dtype)
+    freq = freq * torch.pi
+    kx, ky = torch.meshgrid(freq, freq, indexing='xy')
+    k_squared = kx.square() + ky.square()
+    k_squared[0, 0] = 1.0
+    return kx, ky, k_squared
+
+
+def generate_ns_vorticity_initial_condition(
+    config: NSVorticityConfig,
+    amplitude: float = 1.0,
+    dtype: torch.dtype = torch.float64,
+    device: Union[torch.device, str] = 'cpu',
+) -> torch.Tensor:
+    complex_dtype = torch.complex128 if dtype == torch.float64 else torch.complex64
+    freq = torch.zeros((config.nx, config.nx), dtype=complex_dtype, device=device)
+    for i in range(-config.modes, config.modes + 1):
+        for j in range(-config.modes, config.modes + 1):
+            scale = 1.0 / (1.0 + i * i + j * j)
+            phase = 2.0 * math.pi * torch.rand((), dtype=dtype, device=device)
+            coeff = torch.randn((), dtype=dtype, device=device) * scale
+            freq[i % config.nx, j % config.nx] = coeff * torch.exp(1j * phase)
+    field = torch.fft.ifft2(freq).real
+    field = field - field.mean()
+    scale = torch.clamp(field.abs().max(), min=torch.finfo(field.dtype).eps)
+    return amplitude * field / scale
+
+
+def compute_velocity_from_vorticity(
+    omega: torch.Tensor,
+    config: NSVorticityConfig,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    dtype = omega.dtype
+    device = omega.device
+    kx, ky, k_squared = _ns_spectral_operators(config, dtype=dtype, device=device)
+    omega_hat = torch.fft.fft2(omega)
+    psi_hat = -omega_hat / k_squared
+    psi_hat[0, 0] = 0.0
+    u = torch.fft.ifft2(1j * ky * psi_hat).real
+    v = -torch.fft.ifft2(1j * kx * psi_hat).real
+    lap = torch.fft.ifft2(-k_squared * omega_hat).real
+    return u, v, lap, omega_hat, psi_hat
+
+
+def navier_stokes_vorticity_rollout(
+    initial_vorticity: torch.Tensor,
+    config: NSVorticityConfig,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    dtype = initial_vorticity.dtype
+    device = initial_vorticity.device
+    _, x = ns_vorticity_grid(config, dtype=dtype, device=device)
+    kx, ky, k_squared = _ns_spectral_operators(config, dtype=dtype, device=device)
+    total_steps = int(round(config.tmax / config.dt))
+    num_snapshots = total_steps // config.snapshot_stride + 1
+
+    solutions = torch.zeros((config.nx * config.nx, num_snapshots), dtype=dtype, device=device)
+    gradients_x = torch.zeros_like(solutions)
+    gradients_y = torch.zeros_like(solutions)
+    laplacians = torch.zeros_like(solutions)
+    streamfunctions = torch.zeros_like(solutions)
+
+    omega = initial_vorticity.clone()
+    snapshot_index = 0
+    for step in range(total_steps + 1):
+        u, v, lap, omega_hat, psi_hat = compute_velocity_from_vorticity(omega, config)
+        d_omega_dx = torch.fft.ifft2(1j * kx * omega_hat).real
+        d_omega_dy = torch.fft.ifft2(1j * ky * omega_hat).real
+        psi = torch.fft.ifft2(psi_hat).real
+
+        if step % config.snapshot_stride == 0:
+            solutions[:, snapshot_index] = omega.reshape(-1)
+            gradients_x[:, snapshot_index] = d_omega_dx.reshape(-1)
+            gradients_y[:, snapshot_index] = d_omega_dy.reshape(-1)
+            laplacians[:, snapshot_index] = lap.reshape(-1)
+            streamfunctions[:, snapshot_index] = psi.reshape(-1)
+            snapshot_index += 1
+
+        if step == total_steps:
+            break
+
+        convection = u * d_omega_dx + v * d_omega_dy
+        convection_hat = torch.fft.fft2(convection)
+        numerator = (1.0 - 0.5 * config.dt * config.viscosity * k_squared) * omega_hat - config.dt * convection_hat
+        denominator = 1.0 + 0.5 * config.dt * config.viscosity * k_squared
+        omega_hat_next = numerator / denominator
+        omega_hat_next[0, 0] = 0.0
+        omega = torch.fft.ifft2(omega_hat_next).real
+
+    times = torch.linspace(0.0, config.tmax, num_snapshots, dtype=dtype, device=device)
+    return x, times, solutions, gradients_x, gradients_y, laplacians
+
+
+def navier_stokes_vorticity_dataset(
+    num_samples: int,
+    config: NSVorticityConfig,
+    dtype: torch.dtype = torch.float64,
+    device: Union[torch.device, str] = 'cpu',
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    points, _ = ns_vorticity_grid(config, dtype=dtype, device=device)
+    total_steps = int(round(config.tmax / config.dt))
+    num_snapshots = total_steps // config.snapshot_stride + 1
+    solutions = torch.zeros((num_samples, points.shape[0], num_snapshots), dtype=dtype, device=device)
+    gradients_x = torch.zeros_like(solutions)
+    gradients_y = torch.zeros_like(solutions)
+    laplacians = torch.zeros_like(solutions)
+    initial_conditions = torch.zeros((num_samples, config.nx, config.nx), dtype=dtype, device=device)
+
+    for sample in range(num_samples):
+        omega0 = generate_ns_vorticity_initial_condition(config, dtype=dtype, device=device)
+        _, times, sol, grad_x, grad_y, lap = navier_stokes_vorticity_rollout(omega0, config)
+        initial_conditions[sample] = omega0
+        solutions[sample] = sol
+        gradients_x[sample] = grad_x
+        gradients_y[sample] = grad_y
+        laplacians[sample] = lap
+
+    return points, times, solutions, gradients_x, gradients_y, laplacians, initial_conditions
+
+
+def compute_energy_spectrum(omega: torch.Tensor, config: NSVorticityConfig) -> torch.Tensor:
+    omega = omega.to(dtype=torch.float64)
+    kx, ky, k_squared = _ns_spectral_operators(config, dtype=omega.dtype, device=omega.device)
+    omega_hat = torch.fft.fft2(omega)
+    psi_hat = -omega_hat / k_squared
+    psi_hat[0, 0] = 0.0
+    u_hat = 1j * ky * psi_hat
+    v_hat = -1j * kx * psi_hat
+    energy_density = 0.5 * (u_hat.abs().square() + v_hat.abs().square())
+    k_shell = torch.sqrt(kx.square() + ky.square()).to(dtype=torch.long)
+    k_max = int(k_shell.max().item())
+    spectrum = torch.zeros(k_max + 1, dtype=omega.dtype, device=omega.device)
+    counts = torch.zeros_like(spectrum)
+    for i in range(config.nx):
+        for j in range(config.nx):
+            shell = int(k_shell[i, j].item())
+            spectrum[shell] += energy_density[i, j].real
+            counts[shell] += 1.0
+    return spectrum / counts.clamp_min(1.0)

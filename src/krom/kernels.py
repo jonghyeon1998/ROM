@@ -127,13 +127,13 @@ def matern52_2d_laplace_y(x: torch.Tensor, y: torch.Tensor, lengthscale: float) 
 def matern52_2d_laplace_x_dy1(x: torch.Tensor, y: torch.Tensor, lengthscale: float) -> torch.Tensor:
     dx1, _, radius, exp_term = _matern52_2d_terms(x, y, lengthscale)
     ell = torch.as_tensor(lengthscale, dtype=dx1.dtype, device=dx1.device)
-    return -25.0 * SQRT5 * dx1 * exp_term * (4.0 - SQRT5 * radius / ell) / (3.0 * ell.pow(4))
+    return -25.0 * dx1 * exp_term * (4.0 - SQRT5 * radius / ell) / (3.0 * ell.pow(4))
 
 
 def matern52_2d_laplace_x_dy2(x: torch.Tensor, y: torch.Tensor, lengthscale: float) -> torch.Tensor:
     _, dx2, radius, exp_term = _matern52_2d_terms(x, y, lengthscale)
     ell = torch.as_tensor(lengthscale, dtype=dx2.dtype, device=dx2.device)
-    return -25.0 * SQRT5 * dx2 * exp_term * (4.0 - SQRT5 * radius / ell) / (3.0 * ell.pow(4))
+    return -25.0 * dx2 * exp_term * (4.0 - SQRT5 * radius / ell) / (3.0 * ell.pow(4))
 
 
 def matern52_2d_laplace_y_dx1(x: torch.Tensor, y: torch.Tensor, lengthscale: float) -> torch.Tensor:

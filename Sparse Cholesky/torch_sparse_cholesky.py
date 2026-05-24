@@ -1,6 +1,13 @@
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import torch
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.append(str(PROJECT_ROOT))
 
 from src.krom.factors import SparseInverseFactor
 from src.krom.ordering import MeasurementOrdering, build_measurement_ordering, maximin
@@ -24,10 +31,10 @@ def sparse_cholesky_from_measurements(
 
 
 __all__ = [
-    "MeasurementOrdering",
-    "SparseInverseFactor",
-    "build_measurement_ordering",
-    "build_sparsity_pattern",
-    "maximin",
-    "sparse_cholesky_from_measurements",
+    'MeasurementOrdering',
+    'SparseInverseFactor',
+    'build_measurement_ordering',
+    'build_sparsity_pattern',
+    'maximin',
+    'sparse_cholesky_from_measurements',
 ]

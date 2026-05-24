@@ -2,8 +2,15 @@ from __future__ import annotations
 
 from typing import Iterable
 
+import numpy as np
+import scipy.sparse as sp
 import torch
 from scipy.spatial import cKDTree
+
+try:
+    from sksparse.cholmod import cholesky as cholmod_cholesky
+except Exception:  # pragma: no cover - optional runtime dependency
+    cholmod_cholesky = None
 
 from .factors import SparseInverseFactor
 from .ordering import MeasurementOrdering, build_measurement_ordering
@@ -49,6 +56,10 @@ def _normalized_precision_column(
     raise torch.linalg.LinAlgError("Sparse Cholesky column block remained indefinite after jitter escalation.")
 
 
+def _as_numpy_permutation(permutation: torch.Tensor) -> np.ndarray:
+    return permutation.detach().cpu().numpy().astype(np.int64, copy=False)
+
+
 def sparse_precision_factor(
     theta: torch.Tensor,
     dirac_points: torch.Tensor,
@@ -56,6 +67,7 @@ def sparse_precision_factor(
     rho: float = 3.0,
     nugget: float = 1e-10,
     ordering: MeasurementOrdering | None = None,
+    backend: str = 'auto',
 ) -> tuple[SparseInverseFactor, MeasurementOrdering]:
     if ordering is None:
         ordering = build_measurement_ordering(dirac_points, derivative_point_groups)
@@ -74,7 +86,24 @@ def sparse_precision_factor(
         col_indices.extend([column] * len(support))
         data_chunks.append(values)
 
-    data = torch.cat(data_chunks, dim=0)
-    indices = torch.tensor([row_indices, col_indices], dtype=torch.long, device=theta.device)
-    factor = torch.sparse_coo_tensor(indices, data, size=reordered_theta.shape, device=theta.device).coalesce()
-    return SparseInverseFactor(factor=factor, permutation=permutation), ordering
+    data = torch.cat(data_chunks, dim=0).detach().cpu().numpy()
+    factor_csc = sp.csc_matrix((data, (row_indices, col_indices)), shape=tuple(reordered_theta.shape))
+    permutation_np = _as_numpy_permutation(permutation)
+
+    backend_mode = backend
+    if backend_mode == 'auto':
+        backend_mode = 'scipy'
+
+    if backend_mode == 'scipy':
+        return SparseInverseFactor(factor=factor_csc, permutation=permutation_np, backend_name='scipy_sparse'), ordering
+
+    if backend_mode == 'cholmod':
+        if cholmod_cholesky is None:
+            raise ImportError('CHOLMOD backend requested but scikit-sparse is not installed.')
+        approx_precision = (factor_csc @ factor_csc.transpose()).tocsc()
+        cholmod_factor = cholmod_cholesky(approx_precision)
+        cholmod_perm = np.asarray(cholmod_factor.P(), dtype=np.int64)
+        total_permutation = permutation_np[cholmod_perm]
+        return SparseInverseFactor(factor=cholmod_factor.L(), permutation=total_permutation, backend_name='cholmod_sparse'), ordering
+
+    raise ValueError(f'Unsupported sparse backend: {backend}')

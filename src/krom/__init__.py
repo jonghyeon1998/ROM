@@ -37,6 +37,24 @@ from .kernels import (
     matern52_2d_laplace_y_dx1,
     matern52_2d_laplace_y_dx2,
 )
+from .moving_domain import (
+    MovingDomainHeatConfig,
+    MovingDomainHeatProblem,
+    breathing_rate_ratio,
+    breathing_scale,
+    build_moving_domain_flattened_coordinates,
+    build_moving_domain_problem,
+    build_moving_heat_empirical_theta,
+    build_moving_heat_factors,
+    build_moving_heat_matern_theta,
+    generate_moving_heat_initial_condition,
+    moving_heat_dataset,
+    moving_heat_linear_operator,
+    moving_heat_residual_and_jacobian,
+    moving_heat_residual_operator,
+    moving_heat_rollout,
+    rollout_moving_heat_krom,
+)
 from .navier_stokes import (
     NavierStokesFactorBundle,
     PrecomputedStreamfunctionOperator,

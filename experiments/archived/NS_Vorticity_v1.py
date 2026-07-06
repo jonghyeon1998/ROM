@@ -72,7 +72,7 @@ def evaluate_kernel_kind(kernel_kind: str, factor_mode: str, poisson_solver: str
     return summary
 
 
-def run_experiment(config: NSVorticityConfig = DEFAULT_CONFIG, poisson_solver: str = 'fft', rho: float = 3.0, lengthscale: float = 0.35, gn_steps: int = 2, gn_damping: float = 1e-8, num_train: int = 8, num_test: int = 6, train_seed: int = 0, test_seed: int = 1, sparse_backend: str = 'auto', k_neighbors: int = 3) -> dict[str, object]:
+def run_experiment(config: NSVorticityConfig = DEFAULT_CONFIG, poisson_solver: str = 'fft', rho: float = 3.0, lengthscale: float = 0.35, gn_steps: int = 2, gn_damping: float = 1e-8, num_train: int = 8, num_test: int = 6, train_seed: int = 0, test_seed: int = 1, sparse_backend: str = 'auto') -> dict[str, object]:
     torch.manual_seed(train_seed)
     start = time.perf_counter()
     points, times, train_solutions, train_dx, train_dy, train_lap, _ = navier_stokes_vorticity_dataset(num_train, config)
@@ -81,7 +81,7 @@ def run_experiment(config: NSVorticityConfig = DEFAULT_CONFIG, poisson_solver: s
     start = time.perf_counter()
     _, _, test_solutions, test_dx, test_dy, test_lap, test_initial = navier_stokes_vorticity_dataset(num_test, config)
     test_snapshot_seconds = time.perf_counter() - start
-    factor_bundle = build_navier_stokes_factors(points=points, train_solutions=train_solutions, train_dx=train_dx, train_dy=train_dy, train_laplacians=train_lap, config=config, rho=rho, lengthscale=lengthscale, nugget=1e-9, sparse_backend=sparse_backend, k_neighbors=k_neighbors)
+    factor_bundle = build_navier_stokes_factors(points=points, train_solutions=train_solutions, train_dx=train_dx, train_dy=train_dy, train_laplacians=train_lap, config=config, rho=rho, lengthscale=lengthscale, nugget=1e-9, sparse_backend=sparse_backend)
     full_order_times = benchmark_full_order(test_initial, config)
 
     empirical_sparse = evaluate_kernel_kind('empirical', 'sparse', poisson_solver, factor_bundle, config, test_solutions, test_dx, test_dy, test_lap, test_initial, gn_steps, gn_damping, full_order_times)

@@ -71,17 +71,14 @@ def build_factor_pair(theta, dirac_points, derivative_groups, ordering, rho: flo
     return {'dense': dense_factor, 'sparse': sparse_factor}, {'dense_seconds': dense_seconds, 'sparse_seconds': sparse_seconds}
 
 
-def build_factors(config: AllenCahnCNConfig, train_sol: torch.Tensor, train_lap: torch.Tensor, rho: float, lengthscale: float, nugget: float = 1e-9, sparse_backend: str = 'auto', k_neighbors: int = 3):
+def build_factors(config: AllenCahnCNConfig, train_sol: torch.Tensor, train_lap: torch.Tensor, rho: float, lengthscale: float, nugget: float = 1e-9, sparse_backend: str = 'auto'):
     coords = build_allen_cahn_flattened_coordinates(config)
     n_int = (config.nx - 2) * (config.ny - 2)
     interior_points = coords[:n_int]
     boundary_points = coords[n_int:]
     derivative_groups = (torch.arange(n_int, dtype=torch.long),)
     start = time.perf_counter()
-    # k_neighbors=3 aligns with the official repo's stated default for PDE
-    # problems with derivative measurements (boundary points here have no
-    # co-located derivatives, so "follow_diracs" isn't structurally usable).
-    ordering = build_measurement_ordering(coords, derivative_groups, k_neighbors=k_neighbors)
+    ordering = build_measurement_ordering(coords, derivative_groups)
     ordering_seconds = time.perf_counter() - start
 
     dirac_features = temporal_feature_matrix(train_sol)
@@ -164,14 +161,14 @@ def evaluate_factor(factor: object, config: AllenCahnCNConfig, test_sol: torch.T
     }
 
 
-def run_experiment(config: AllenCahnCNConfig = DEFAULT_CONFIG, rho: float = 4.0, lengthscale: float = 0.30, gn_steps: int = 2, gn_damping: float = 1e-8, num_train: int = 8, num_test: int = 8, train_seed: int = 0, test_seed: int = 1, sparse_backend: str = 'auto', k_neighbors: int = 3) -> dict[str, object]:
+def run_experiment(config: AllenCahnCNConfig = DEFAULT_CONFIG, rho: float = 4.0, lengthscale: float = 0.30, gn_steps: int = 2, gn_damping: float = 1e-8, num_train: int = 8, num_test: int = 8, train_seed: int = 0, test_seed: int = 1, sparse_backend: str = 'auto') -> dict[str, object]:
     start = time.perf_counter()
     train_sol, train_lap = generate_dataset(config, num_train, train_seed)
     train_snapshot_seconds = time.perf_counter() - start
     start = time.perf_counter()
     test_sol, test_lap = generate_dataset(config, num_test, test_seed)
     test_snapshot_seconds = time.perf_counter() - start
-    factors = build_factors(config, train_sol, train_lap, rho=rho, lengthscale=lengthscale, sparse_backend=sparse_backend, k_neighbors=k_neighbors)
+    factors = build_factors(config, train_sol, train_lap, rho=rho, lengthscale=lengthscale, sparse_backend=sparse_backend)
     full_order_times = benchmark_full_order(config, test_sol, factors['n_int'])
 
     empirical_sparse = evaluate_factor(factors['empirical_sparse'], config, test_sol, test_lap, factors['boundary_values'], factors['n_int'], gn_steps, gn_damping, full_order_times)

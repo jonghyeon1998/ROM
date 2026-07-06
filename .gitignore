@@ -1,10 +1,23 @@
+# macOS
 .DS_Store
+
+# Python cache files
 __pycache__/
 *.pyc
-.DS_Store
-__pycache__/
-*.pyc
+*.pyo
+*.pyd
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Virtual environments
+krom/
+venv/
+.venv/
+.env/
+
+# Archived/generated experiment outputs
 archived_experiments/heat_*
 archived_experiments/temp_FDM
 archived_experiments/mesh_points
-archived_experiments/points
+archived_experiments/pointskrom/

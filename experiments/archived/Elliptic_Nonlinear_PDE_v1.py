@@ -111,14 +111,9 @@ def build_factor_pair(theta, dirac_points, derivative_groups, ordering, rho: flo
     return {'dense': dense_factor, 'sparse': sparse_factor}, {'dense_seconds': dense_seconds, 'sparse_seconds': sparse_seconds}
 
 
-def build_factors(problem: dict[str, object], solution_bank: torch.Tensor, nonlinear_bank: torch.Tensor, rho: float, lengthscale: float, sparse_backend: str = 'auto', k_neighbors: int = 3):
+def build_factors(problem: dict[str, object], solution_bank: torch.Tensor, nonlinear_bank: torch.Tensor, rho: float, lengthscale: float, sparse_backend: str = 'auto'):
     start = time.perf_counter()
-    # k_neighbors=3 aligns with the official repo's stated default for PDE
-    # problems with derivative measurements (the official NonlinElliptic2d
-    # solver this most resembles uses "follow_diracs", but that variant
-    # requires every Dirac point to carry the same derivative groups; the
-    # boundary points here have none, so it isn't structurally applicable).
-    ordering = build_measurement_ordering(problem['coords'], (torch.arange(problem['n_int'], dtype=torch.long),), k_neighbors=k_neighbors)
+    ordering = build_measurement_ordering(problem['coords'], (torch.arange(problem['n_int'], dtype=torch.long),))
     ordering_seconds = time.perf_counter() - start
     empirical_theta = build_elliptic_empirical_theta(solution_bank, nonlinear_bank, nugget=1e-10) / solution_bank.shape[1]
     matern_assembly = build_elliptic_matern_theta(problem['interior_points'], problem['boundary_points'], lengthscale=lengthscale, nugget=1e-10)
@@ -172,12 +167,12 @@ def evaluate_factor(problem: dict[str, object], factor: object, truth: torch.Ten
     }
 
 
-def run_experiment(grid_config: AllenCahnCNConfig = DEFAULT_GRID_CONFIG, rho: float = 4.0, lengthscale: float = 0.30, gn_steps: int = 4, alpha: float = 1.0, power: int = 3, num_snapshots: int = 256, sparse_backend: str = 'auto', k_neighbors: int = 3) -> dict[str, object]:
+def run_experiment(grid_config: AllenCahnCNConfig = DEFAULT_GRID_CONFIG, rho: float = 4.0, lengthscale: float = 0.30, gn_steps: int = 4, alpha: float = 1.0, power: int = 3, num_snapshots: int = 256, sparse_backend: str = 'auto') -> dict[str, object]:
     problem = build_problem(grid_config, alpha=alpha, power=power)
     start = time.perf_counter()
     solution_bank, nonlinear_bank = build_snapshot_bank(problem, alpha=alpha, power=power, num_snapshots=num_snapshots)
     train_snapshot_seconds = time.perf_counter() - start
-    factors = build_factors(problem, solution_bank, nonlinear_bank, rho=rho, lengthscale=lengthscale, sparse_backend=sparse_backend, k_neighbors=k_neighbors)
+    factors = build_factors(problem, solution_bank, nonlinear_bank, rho=rho, lengthscale=lengthscale, sparse_backend=sparse_backend)
     full_order_times = benchmark_full_order(problem, alpha=alpha, power=power)
     empirical_sparse = evaluate_factor(problem, factors['empirical_sparse'], problem['truth'], alpha=alpha, power=power, gn_steps=gn_steps, full_order_times=full_order_times)
     empirical_dense = evaluate_factor(problem, factors['empirical_dense'], problem['truth'], alpha=alpha, power=power, gn_steps=gn_steps, full_order_times=full_order_times)

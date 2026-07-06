@@ -209,7 +209,17 @@ def build_navier_stokes_factors(
     stride: int = 1,
     streamfunction_damping: float = 1e-8,
     sparse_backend: str = 'auto',
+    k_neighbors: int = 3,
+    ordering_variant: str = 'dirac_first_then_unif_scale',
 ) -> NavierStokesFactorBundle:
+    # k_neighbors=3 aligns with the official repo's stated default for PDE
+    # problems with derivative measurements (same alignment already applied
+    # to Burgers/Allen-Cahn/Darcy/Elliptic/Moving-Domain-Heat). Note: every
+    # point here carries all three derivative groups, so this case is
+    # structurally eligible for ordering_variant="follow_diracs" too -- it's
+    # exposed as a parameter but left at the same default variant used
+    # elsewhere unless you opt in. The Gauss-Newton vorticity time-stepping
+    # and the fft/kernel Poisson-solve choice are untouched by this change.
     build_times: dict[str, float] = {}
     derivative_groups = (
         torch.arange(points.shape[0], dtype=torch.long, device=points.device),
@@ -217,7 +227,7 @@ def build_navier_stokes_factors(
         torch.arange(points.shape[0], dtype=torch.long, device=points.device),
     )
     start = time.perf_counter()
-    ordering = build_measurement_ordering(points, derivative_groups)
+    ordering = build_measurement_ordering(points, derivative_groups, k_neighbors=k_neighbors, variant=ordering_variant)
     build_times['ordering_seconds'] = time.perf_counter() - start
 
     matern_assembly = build_navier_stokes_matern_theta(points, lengthscale=lengthscale, nugget=nugget)

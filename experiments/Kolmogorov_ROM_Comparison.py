@@ -103,6 +103,10 @@ class ExperimentConfig:
     krom_gn_steps: int = 3
     krom_damping: float = 1e-8
     krom_cg_tol: float = 1e-6
+    # k_neighbors=3 aligns with the official repo's stated default for PDE
+    # problems with derivative measurements (same alignment applied to
+    # Burgers/Allen-Cahn/Darcy/Elliptic/Moving-Domain-Heat/navier_stokes.py).
+    krom_k_neighbors: int = 3
     # POD
     pod_k_values: list = field(default_factory=lambda: [5, 10, 20, 30, 50])
     # DEIM
@@ -1080,7 +1084,7 @@ def run_comparison(
         torch.arange(n_points, dtype=torch.long),
         torch.arange(n_points, dtype=torch.long),
     )
-    ordering = build_measurement_ordering(points, derivative_groups)
+    ordering = build_measurement_ordering(points, derivative_groups, k_neighbors=exp_config.krom_k_neighbors)
 
     krom_factors = {}
     krom_build_times = {}

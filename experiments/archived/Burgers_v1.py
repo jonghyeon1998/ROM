@@ -52,7 +52,7 @@ def build_factor_pair(theta, dirac_points, derivative_groups, ordering, rho: flo
     return {'dense': dense_factor, 'sparse': sparse_factor}, {'dense_seconds': dense_seconds, 'sparse_seconds': sparse_seconds}
 
 
-def build_factors(x: torch.Tensor, train_u: torch.Tensor, train_ux: torch.Tensor, train_uxx: torch.Tensor, rho: float, lengthscale: float, nugget: float = 1e-9, sparse_backend: str = 'auto', k_neighbors: int = 3):
+def build_factors(x: torch.Tensor, train_u: torch.Tensor, train_ux: torch.Tensor, train_uxx: torch.Tensor, rho: float, lengthscale: float, nugget: float = 1e-9, sparse_backend: str = 'auto'):
     n_int = x.numel() - 2
     interior_points = x[1:-1, None]
     boundary_points = torch.tensor([[x[0]], [x[-1]]], dtype=x.dtype, device=x.device)
@@ -62,13 +62,7 @@ def build_factors(x: torch.Tensor, train_u: torch.Tensor, train_ux: torch.Tensor
         torch.arange(n_int, dtype=torch.long, device=x.device),
     )
     start = time.perf_counter()
-    # k_neighbors=3 matches the official GP-PDEs-SparseCholesky repo's stated
-    # default for PDE problems with derivative measurements (k=1 is only the
-    # plain point-cloud default). The boundary Dirac points here have no
-    # co-located derivative measurements, so the "follow_diracs" ordering
-    # variant isn't structurally applicable; this stays on the default
-    # "dirac_first_then_unif_scale" variant.
-    ordering = build_measurement_ordering(dirac_points, derivative_groups, k_neighbors=k_neighbors)
+    ordering = build_measurement_ordering(dirac_points, derivative_groups)
     ordering_seconds = time.perf_counter() - start
 
     dirac_snapshots = torch.cat([train_u[:, 1:-1, :], train_u[:, [0, -1], :]], dim=1)
@@ -152,7 +146,7 @@ def evaluate_factor(factor: object, test_u: torch.Tensor, test_ux: torch.Tensor,
     }
 
 
-def run_experiment(config: BurgersCNConfig = DEFAULT_CONFIG, rho: float = 4.0, lengthscale: float = 0.30, gn_steps: int = 3, gn_damping: float = 1e-8, num_train: int = 10, num_test: int = 12, train_seed: int = 0, test_seed: int = 1, sparse_backend: str = 'auto', k_neighbors: int = 3) -> dict[str, object]:
+def run_experiment(config: BurgersCNConfig = DEFAULT_CONFIG, rho: float = 4.0, lengthscale: float = 0.30, gn_steps: int = 3, gn_damping: float = 1e-8, num_train: int = 10, num_test: int = 12, train_seed: int = 0, test_seed: int = 1, sparse_backend: str = 'auto') -> dict[str, object]:
     torch.manual_seed(train_seed)
     start = time.perf_counter()
     x, times, train_u, train_ux, train_uxx = burgers_crank_nicolson_dataset(num_train, config, num_terms=4)
@@ -161,7 +155,7 @@ def run_experiment(config: BurgersCNConfig = DEFAULT_CONFIG, rho: float = 4.0, l
     start = time.perf_counter()
     _, _, test_u, test_ux, test_uxx = burgers_crank_nicolson_dataset(num_test, config, num_terms=4)
     test_snapshot_seconds = time.perf_counter() - start
-    factors = build_factors(x, train_u, train_ux, train_uxx, rho=rho, lengthscale=lengthscale, sparse_backend=sparse_backend, k_neighbors=k_neighbors)
+    factors = build_factors(x, train_u, train_ux, train_uxx, rho=rho, lengthscale=lengthscale, sparse_backend=sparse_backend)
     full_order_times = benchmark_full_order(test_u, config)
 
     empirical_sparse = evaluate_factor(factors['empirical_sparse'], test_u, test_ux, test_uxx, config, factors['boundary_values'], gn_steps, gn_damping, full_order_times)

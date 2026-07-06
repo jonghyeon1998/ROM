@@ -118,18 +118,12 @@ def build_factor_pair(theta, dirac_points, derivative_groups, ordering, rho: flo
     return {'dense': dense_factor, 'sparse': sparse_factor}, {'dense_seconds': dense_seconds, 'sparse_seconds': sparse_seconds}
 
 
-def build_factors(problem: dict[str, object], train_solutions: torch.Tensor, train_rhs: torch.Tensor, rho: float, lengthscale: float, sparse_backend: str = 'auto', k_neighbors: int = 3):
+def build_factors(problem: dict[str, object], train_solutions: torch.Tensor, train_rhs: torch.Tensor, rho: float, lengthscale: float, sparse_backend: str = 'auto'):
     num_train = train_solutions.shape[1]
     train_solution_bank = torch.cat([train_solutions, torch.zeros(problem['boundary_points'].shape[0], num_train)], dim=0)
     train_nonlinear_bank = train_rhs - train_solutions.pow(3)
     start = time.perf_counter()
-    # k_neighbors=3 aligns with the official repo's stated default for PDE
-    # problems with derivative measurements. Boundary points have no
-    # co-located derivative measurement here, so this stays on the default
-    # "dirac_first_then_unif_scale" variant (the one the paper's theory
-    # covers, and the closer analog to this elliptic problem's official
-    # counterpart).
-    ordering = build_measurement_ordering(problem['coords'], (torch.arange(problem['n_int'], dtype=torch.long),), k_neighbors=k_neighbors)
+    ordering = build_measurement_ordering(problem['coords'], (torch.arange(problem['n_int'], dtype=torch.long),))
     ordering_seconds = time.perf_counter() - start
     empirical_theta = build_elliptic_empirical_theta(train_solution_bank, train_nonlinear_bank, nugget=1e-10) / num_train
     matern_assembly = build_elliptic_matern_theta(problem['interior_points'], problem['boundary_points'], lengthscale=lengthscale, nugget=1e-10)
@@ -191,7 +185,7 @@ def evaluate_factor(problem: dict[str, object], factor: object, test_rhs: torch.
     }
 
 
-def run_experiment(grid_size: int = DEFAULT_GRID_SIZE, rho: float = 4.0, lengthscale: float = 0.30, gn_steps: int = 3, num_train: int = 12, num_test: int = 10, train_seed: int = 0, test_seed: int = 1, sparse_backend: str = 'auto', preconditioner_mode: str | None = None, k_neighbors: int = 3) -> dict[str, object]:
+def run_experiment(grid_size: int = DEFAULT_GRID_SIZE, rho: float = 4.0, lengthscale: float = 0.30, gn_steps: int = 3, num_train: int = 12, num_test: int = 10, train_seed: int = 0, test_seed: int = 1, sparse_backend: str = 'auto', preconditioner_mode: str | None = None) -> dict[str, object]:
     problem = build_darcy_problem(grid_size)
     torch.manual_seed(train_seed)
     start = time.perf_counter()
@@ -203,7 +197,7 @@ def run_experiment(grid_size: int = DEFAULT_GRID_SIZE, rho: float = 4.0, lengths
     test_rhs = torch.stack([sample_smooth_forcing(grid_size) for _ in range(num_test)], dim=1)
     test_solutions = torch.stack([solve_full_order(problem['matrix'], test_rhs[:, index]) for index in range(num_test)], dim=1)
     test_snapshot_seconds = time.perf_counter() - start
-    factors = build_factors(problem, train_solutions, train_rhs, rho=rho, lengthscale=lengthscale, sparse_backend=sparse_backend, k_neighbors=k_neighbors)
+    factors = build_factors(problem, train_solutions, train_rhs, rho=rho, lengthscale=lengthscale, sparse_backend=sparse_backend)
     full_order_times = benchmark_full_order(problem, test_rhs)
     empirical_sparse = evaluate_factor(problem, factors['empirical_sparse'], test_rhs, test_solutions, gn_steps, full_order_times, preconditioner_mode=preconditioner_mode)
     empirical_dense = evaluate_factor(problem, factors['empirical_dense'], test_rhs, test_solutions, gn_steps, full_order_times, preconditioner_mode=preconditioner_mode)

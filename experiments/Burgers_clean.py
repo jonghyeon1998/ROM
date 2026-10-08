@@ -19,7 +19,7 @@ from src.krom.factors import dense_precision_factor
 from src.krom.gauss_newton import solve_gauss_newton
 from src.krom.ordering import build_measurement_ordering
 from src.krom.pde_baselines import BurgersCNConfig, burgers_crank_nicolson_dataset, burgers_crank_nicolson_rollout
-from src.krom.sparse_cholesky import sparse_precision_factor
+from src.krom.sparse_cholesky import SnapshotKernelSource, make_snapshot_kernel_source, sparse_precision_factor
 from src.krom.sweeps import plot_sweep_result, run_comparison_sweep
 from src.krom.workflows import build_burgers_empirical_theta, build_burgers_matern_theta, burgers_residual_and_jacobian, burgers_residual_operator
 
@@ -34,13 +34,16 @@ def relative_l2(prediction: torch.Tensor, truth: torch.Tensor) -> float:
     return float(torch.linalg.norm(prediction - truth) / torch.linalg.norm(truth).clamp_min(torch.finfo(truth.dtype).eps))
 
 
-def build_factor_pair(theta, dirac_points, derivative_groups, ordering, rho: float, nugget: float, sparse_backend: str = 'auto'):
+def build_factor_pair(theta, dirac_points, derivative_groups, ordering, rho: float, nugget: float, sparse_backend: str = 'auto', sparse_kernel_source: SnapshotKernelSource | None = None):
     start = time.perf_counter()
     dense_factor = dense_precision_factor(theta, nugget=nugget)
     dense_seconds = time.perf_counter() - start
+    # Use the lazy SnapshotKernelSource for the sparse factor when provided,
+    # avoiding the O(N²) indexed gather from the pre-computed theta matrix.
+    sparse_input = sparse_kernel_source if sparse_kernel_source is not None else theta
     start = time.perf_counter()
     sparse_factor, _ = sparse_precision_factor(
-        theta=theta,
+        theta=sparse_input,
         dirac_points=dirac_points,
         derivative_point_groups=derivative_groups,
         rho=rho,
@@ -78,7 +81,13 @@ def build_factors(x: torch.Tensor, train_u: torch.Tensor, train_ux: torch.Tensor
     empirical_theta = build_burgers_empirical_theta(dirac_features, ux_features, uxx_features, nugget=nugget) / dirac_features.shape[1]
     matern_assembly = build_burgers_matern_theta(interior_points=interior_points, boundary_points=boundary_points, lengthscale=lengthscale, nugget=nugget)
 
-    empirical_factors, empirical_times = build_factor_pair(empirical_theta, dirac_points, derivative_groups, ordering, rho=rho, nugget=nugget, sparse_backend=sparse_backend)
+    M = dirac_features.shape[1]
+    empirical_ks = make_snapshot_kernel_source(
+        (dirac_features, ux_features, uxx_features),
+        nugget=nugget,
+        scale=1.0 / M,
+    )
+    empirical_factors, empirical_times = build_factor_pair(empirical_theta, dirac_points, derivative_groups, ordering, rho=rho, nugget=nugget, sparse_backend=sparse_backend, sparse_kernel_source=empirical_ks)
     matern_factors, matern_times = build_factor_pair(matern_assembly.theta, matern_assembly.dirac_points, matern_assembly.derivative_point_groups, ordering, rho=rho, nugget=nugget, sparse_backend=sparse_backend)
 
     return {

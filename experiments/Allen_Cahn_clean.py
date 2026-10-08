@@ -19,7 +19,7 @@ from src.krom.factors import dense_precision_factor
 from src.krom.gauss_newton import solve_gauss_newton
 from src.krom.ordering import build_measurement_ordering
 from src.krom.pde_baselines import AllenCahnCNConfig, build_allen_cahn_flattened_coordinates, generate_allen_cahn_initial_condition, solve_allen_cahn_crank_nicolson
-from src.krom.sparse_cholesky import sparse_precision_factor
+from src.krom.sparse_cholesky import SnapshotKernelSource, make_snapshot_kernel_source, sparse_precision_factor
 from src.krom.sweeps import plot_sweep_result, run_comparison_sweep
 from src.krom.workflows import allen_cahn_residual_and_jacobian, allen_cahn_residual_operator, build_allen_cahn_empirical_theta, build_elliptic_matern_theta
 
@@ -61,12 +61,13 @@ def generate_dataset(config: AllenCahnCNConfig, num_samples: int, seed: int) -> 
     return flattened_solutions, flattened_laplacians
 
 
-def build_factor_pair(theta, dirac_points, derivative_groups, ordering, rho: float, nugget: float, sparse_backend: str = 'auto'):
+def build_factor_pair(theta, dirac_points, derivative_groups, ordering, rho: float, nugget: float, sparse_backend: str = 'auto', sparse_kernel_source: SnapshotKernelSource | None = None):
     start = time.perf_counter()
     dense_factor = dense_precision_factor(theta, nugget=nugget)
     dense_seconds = time.perf_counter() - start
+    sparse_input = sparse_kernel_source if sparse_kernel_source is not None else theta
     start = time.perf_counter()
-    sparse_factor, _ = sparse_precision_factor(theta=theta, dirac_points=dirac_points, derivative_point_groups=derivative_groups, rho=rho, nugget=nugget, ordering=ordering, backend=sparse_backend)
+    sparse_factor, _ = sparse_precision_factor(theta=sparse_input, dirac_points=dirac_points, derivative_point_groups=derivative_groups, rho=rho, nugget=nugget, ordering=ordering, backend=sparse_backend)
     sparse_seconds = time.perf_counter() - start
     return {'dense': dense_factor, 'sparse': sparse_factor}, {'dense_seconds': dense_seconds, 'sparse_seconds': sparse_seconds}
 
@@ -88,7 +89,13 @@ def build_factors(config: AllenCahnCNConfig, train_sol: torch.Tensor, train_lap:
     lap_features = temporal_feature_matrix(train_lap[:, :n_int, :])
     empirical_theta = build_allen_cahn_empirical_theta(dirac_features, lap_features, nugget=nugget) / dirac_features.shape[1]
     matern_assembly = build_elliptic_matern_theta(interior_points, boundary_points, lengthscale=lengthscale, nugget=nugget)
-    empirical_factors, empirical_times = build_factor_pair(empirical_theta, coords, derivative_groups, ordering, rho=rho, nugget=nugget, sparse_backend=sparse_backend)
+    M = dirac_features.shape[1]
+    empirical_ks = make_snapshot_kernel_source(
+        (dirac_features, lap_features),
+        nugget=nugget,
+        scale=1.0 / M,
+    )
+    empirical_factors, empirical_times = build_factor_pair(empirical_theta, coords, derivative_groups, ordering, rho=rho, nugget=nugget, sparse_backend=sparse_backend, sparse_kernel_source=empirical_ks)
     matern_factors, matern_times = build_factor_pair(matern_assembly.theta, matern_assembly.dirac_points, matern_assembly.derivative_point_groups, ordering, rho=rho, nugget=nugget, sparse_backend=sparse_backend)
     return {
         'coords': coords,

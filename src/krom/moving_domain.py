@@ -29,7 +29,7 @@ from .kernels import (
     matern52_2d_laplace_y_dx2,
 )
 from .ordering import MeasurementOrdering, build_measurement_ordering
-from .sparse_cholesky import sparse_precision_factor
+from .sparse_cholesky import make_snapshot_kernel_source, sparse_precision_factor
 from .workflows import KernelAssembly
 
 
@@ -472,9 +472,15 @@ def build_moving_heat_factors(
     start = time.perf_counter()
     empirical_dense = dense_precision_factor(empirical_theta, nugget=nugget)
     empirical_dense_seconds = time.perf_counter() - start
+    M = solution_features.shape[1]
+    empirical_ks = make_snapshot_kernel_source(
+        (solution_features, dx_features, dy_features, lap_features),
+        nugget=nugget,
+        scale=1.0 / M,
+    )
     start = time.perf_counter()
     empirical_sparse, _ = sparse_precision_factor(
-        theta=empirical_theta,
+        theta=empirical_ks,
         dirac_points=problem.coords,
         derivative_point_groups=derivative_groups,
         rho=rho,

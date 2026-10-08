@@ -18,7 +18,7 @@ from src.krom.factors import dense_precision_factor
 from src.krom.gauss_newton import solve_gauss_newton
 from src.krom.ordering import build_measurement_ordering
 from src.krom.pde_baselines import AllenCahnCNConfig, build_allen_cahn_flattened_coordinates
-from src.krom.sparse_cholesky import sparse_precision_factor
+from src.krom.sparse_cholesky import SnapshotKernelSource, make_snapshot_kernel_source, sparse_precision_factor
 from src.krom.sweeps import plot_sweep_result, run_comparison_sweep
 from src.krom.workflows import build_elliptic_empirical_theta, build_elliptic_matern_theta, elliptic_residual_and_jacobian, elliptic_residual_operator
 
@@ -101,12 +101,13 @@ def solve_full_order(problem: dict[str, object], alpha: float, power: int, max_i
     return state
 
 
-def build_factor_pair(theta, dirac_points, derivative_groups, ordering, rho: float, nugget: float, sparse_backend: str = 'auto'):
+def build_factor_pair(theta, dirac_points, derivative_groups, ordering, rho: float, nugget: float, sparse_backend: str = 'auto', sparse_kernel_source: SnapshotKernelSource | None = None):
     start = time.perf_counter()
     dense_factor = dense_precision_factor(theta, nugget=nugget)
     dense_seconds = time.perf_counter() - start
+    sparse_input = sparse_kernel_source if sparse_kernel_source is not None else theta
     start = time.perf_counter()
-    sparse_factor, _ = sparse_precision_factor(theta=theta, dirac_points=dirac_points, derivative_point_groups=derivative_groups, rho=rho, nugget=nugget, ordering=ordering, backend=sparse_backend)
+    sparse_factor, _ = sparse_precision_factor(theta=sparse_input, dirac_points=dirac_points, derivative_point_groups=derivative_groups, rho=rho, nugget=nugget, ordering=ordering, backend=sparse_backend)
     sparse_seconds = time.perf_counter() - start
     return {'dense': dense_factor, 'sparse': sparse_factor}, {'dense_seconds': dense_seconds, 'sparse_seconds': sparse_seconds}
 
@@ -122,7 +123,12 @@ def build_factors(problem: dict[str, object], solution_bank: torch.Tensor, nonli
     ordering_seconds = time.perf_counter() - start
     empirical_theta = build_elliptic_empirical_theta(solution_bank, nonlinear_bank, nugget=1e-10) / solution_bank.shape[1]
     matern_assembly = build_elliptic_matern_theta(problem['interior_points'], problem['boundary_points'], lengthscale=lengthscale, nugget=1e-10)
-    empirical_factors, empirical_times = build_factor_pair(empirical_theta, problem['coords'], (torch.arange(problem['n_int'], dtype=torch.long),), ordering, rho=rho, nugget=1e-10, sparse_backend=sparse_backend)
+    empirical_ks = make_snapshot_kernel_source(
+        (solution_bank, nonlinear_bank),
+        nugget=1e-10,
+        scale=1.0 / solution_bank.shape[1],
+    )
+    empirical_factors, empirical_times = build_factor_pair(empirical_theta, problem['coords'], (torch.arange(problem['n_int'], dtype=torch.long),), ordering, rho=rho, nugget=1e-10, sparse_backend=sparse_backend, sparse_kernel_source=empirical_ks)
     matern_factors, matern_times = build_factor_pair(matern_assembly.theta, matern_assembly.dirac_points, matern_assembly.derivative_point_groups, ordering, rho=rho, nugget=1e-10, sparse_backend=sparse_backend)
     return {
         'empirical_sparse': empirical_factors['sparse'],

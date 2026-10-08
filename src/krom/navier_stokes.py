@@ -11,7 +11,7 @@ from .factors import dense_precision_factor
 from .gauss_newton import solve_gauss_newton
 from .ordering import build_measurement_ordering
 from .pde_baselines import NSVorticityConfig, _ns_spectral_operators, compute_velocity_from_vorticity
-from .sparse_cholesky import sparse_precision_factor
+from .sparse_cholesky import SnapshotKernelSource, make_snapshot_kernel_source, sparse_precision_factor
 from .workflows import (
     build_navier_stokes_empirical_theta,
     build_navier_stokes_matern_theta,
@@ -277,9 +277,17 @@ def build_navier_stokes_factors(
     start = time.perf_counter()
     vorticity_factors['empirical']['dense'] = dense_precision_factor(empirical_theta, nugget=nugget)
     build_times['empirical_dense_factor_seconds'] = time.perf_counter() - start
+    # Lazy empirical sparse factor: compute only the O(N·ρ^d) kernel entries
+    # needed per Cholesky column — no N×N Gram matrix formed.
+    M_vort = solution_features.shape[1]
+    vorticity_empirical_ks = make_snapshot_kernel_source(
+        (solution_features, dx_features, dy_features, lap_features),
+        nugget=nugget,
+        scale=1.0 / M_vort,
+    )
     start = time.perf_counter()
     vorticity_factors['empirical']['sparse'], _ = sparse_precision_factor(
-        theta=empirical_theta,
+        theta=vorticity_empirical_ks,
         dirac_points=points,
         derivative_point_groups=derivative_groups,
         rho=rho,
@@ -292,9 +300,15 @@ def build_navier_stokes_factors(
     start = time.perf_counter()
     stream_empirical_dense_factor = dense_precision_factor(stream_empirical_theta, nugget=nugget)
     build_times['stream_empirical_dense_factor_seconds'] = time.perf_counter() - start
+    M_psi = psi_features.shape[1]
+    stream_empirical_ks = make_snapshot_kernel_source(
+        (psi_features, psi_x_features, psi_y_features, psi_laplace_features),
+        nugget=nugget,
+        scale=1.0 / M_psi,
+    )
     start = time.perf_counter()
     stream_empirical_sparse_factor, _ = sparse_precision_factor(
-        theta=stream_empirical_theta,
+        theta=stream_empirical_ks,
         dirac_points=points,
         derivative_point_groups=derivative_groups,
         rho=rho,

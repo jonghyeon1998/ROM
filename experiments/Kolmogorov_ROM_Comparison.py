@@ -53,11 +53,10 @@ from src.krom.pde_baselines import (
     ns_vorticity_grid,
 )
 from src.krom.workflows import (
-    build_navier_stokes_empirical_theta,
     navier_stokes_vorticity_residual_operator,
     navier_stokes_vorticity_residual_and_jacobian,
 )
-from src.krom.sparse_cholesky import sparse_precision_factor
+from src.krom.sparse_cholesky import make_snapshot_kernel_source, sparse_precision_factor
 from src.krom.ordering import build_measurement_ordering
 
 torch.set_default_dtype(torch.float64)
@@ -1095,10 +1094,14 @@ def run_comparison(
         dx_feat  = temporal_feature_matrix(train_data['gradients_x'])
         dy_feat  = temporal_feature_matrix(train_data['gradients_y'])
         lap_feat = temporal_feature_matrix(train_data['laplacians'])
-        theta = build_navier_stokes_empirical_theta(sol_feat, dx_feat, dy_feat, lap_feat, nugget=1e-9)
-        theta = theta / sol_feat.shape[1]
+        M = sol_feat.shape[1]
+        empirical_ks = make_snapshot_kernel_source(
+            (sol_feat, dx_feat, dy_feat, lap_feat),
+            nugget=1e-9,
+            scale=1.0 / M,
+        )
         factor, _ = sparse_precision_factor(
-            theta=theta,
+            theta=empirical_ks,
             dirac_points=points,
             derivative_point_groups=derivative_groups,
             rho=rho,

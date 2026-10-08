@@ -106,7 +106,7 @@ try:
         KolmogorovConfig, ExperimentConfig, run_comparison
     )
     kol_cfg = KolmogorovConfig(nx=32)
-    exp_cfg = ExperimentConfig(krom_rho_values=[RHO])
+    exp_cfg = ExperimentConfig(krom_rho_values=[RHO], pod_k_values=[], n_test=4)
     t0 = time.perf_counter()
     r = run_comparison(kol_cfg, exp_cfg, verbose=False)
     elapsed = time.perf_counter() - t0

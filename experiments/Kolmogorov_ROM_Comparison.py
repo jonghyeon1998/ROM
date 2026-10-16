@@ -55,6 +55,7 @@ from src.krom.pde_baselines import (
 from src.krom.workflows import (
     navier_stokes_vorticity_residual_operator,
     navier_stokes_vorticity_residual_and_jacobian,
+    build_navier_stokes_matern_theta,
 )
 from src.krom.sparse_cholesky import make_snapshot_kernel_source, sparse_precision_factor
 from src.krom.ordering import build_measurement_ordering
@@ -106,6 +107,7 @@ class ExperimentConfig:
     # problems with derivative measurements (same alignment applied to
     # Burgers/Allen-Cahn/Darcy/Elliptic/Moving-Domain-Heat/navier_stokes.py).
     krom_k_neighbors: int = 3
+    krom_lengthscale: float = 1.0   # Matérn lengthscale on [0, 2π]²
     # POD
     pod_k_values: list = field(default_factory=lambda: [5, 10, 20, 30, 50])
     # DEIM
@@ -1059,17 +1061,21 @@ def run_comparison(
     # ------------------------------------------------------------------
     if verbose:
         print(f"\n[2/4] Building POD bases and operators...")
-    k_max = max(exp_config.pod_k_values)
-
-    t0 = time.perf_counter()
-    Psi_full, sigma = build_pod_basis(snap_matrix, k_max)
-    svd_time = time.perf_counter() - t0
-    if verbose:
-        cum_var = explained_variance(sigma)
-        print(f"    SVD ({n_points}×{snap_matrix.shape[1]}): {svd_time:.2f}s")
-        for kk in exp_config.pod_k_values:
-            kk = min(kk, sigma.numel())
-            print(f"    k={kk:3d}: explained variance = {float(cum_var[kk-1])*100:.1f}%")
+    if exp_config.pod_k_values:
+        k_max = max(exp_config.pod_k_values)
+        t0 = time.perf_counter()
+        Psi_full, sigma = build_pod_basis(snap_matrix, k_max)
+        svd_time = time.perf_counter() - t0
+        if verbose:
+            cum_var = explained_variance(sigma)
+            print(f"    SVD ({n_points}×{snap_matrix.shape[1]}): {svd_time:.2f}s")
+            for kk in exp_config.pod_k_values:
+                kk = min(kk, sigma.numel())
+                print(f"    k={kk:3d}: explained variance = {float(cum_var[kk-1])*100:.1f}%")
+    else:
+        Psi_full, sigma, svd_time = None, torch.zeros(0), 0.0
+        if verbose:
+            print("    (POD skipped: pod_k_values=[])")
 
     # ------------------------------------------------------------------
     # 3. KROM offline build (sweep over rho)
@@ -1085,16 +1091,21 @@ def run_comparison(
     )
     ordering = build_measurement_ordering(points, derivative_groups, k_neighbors=exp_config.krom_k_neighbors)
 
+    # Pre-build shared features (same across rho values)
+    sol_feat = temporal_feature_matrix(train_data['solutions'])
+    dx_feat  = temporal_feature_matrix(train_data['gradients_x'])
+    dy_feat  = temporal_feature_matrix(train_data['gradients_y'])
+    lap_feat = temporal_feature_matrix(train_data['laplacians'])
+    M = sol_feat.shape[1]
+    matern_assembly = build_navier_stokes_matern_theta(
+        points, lengthscale=exp_config.krom_lengthscale, nugget=1e-9
+    )
+
     krom_factors = {}
+    krom_matern_factors = {}
     krom_build_times = {}
     for rho in exp_config.krom_rho_values:
         t0 = time.perf_counter()
-        # Build empirical theta
-        sol_feat = temporal_feature_matrix(train_data['solutions'])
-        dx_feat  = temporal_feature_matrix(train_data['gradients_x'])
-        dy_feat  = temporal_feature_matrix(train_data['gradients_y'])
-        lap_feat = temporal_feature_matrix(train_data['laplacians'])
-        M = sol_feat.shape[1]
         empirical_ks = make_snapshot_kernel_source(
             (sol_feat, dx_feat, dy_feat, lap_feat),
             nugget=1e-9,
@@ -1109,6 +1120,15 @@ def run_comparison(
             ordering=ordering,
         )
         krom_factors[rho] = factor
+        matern_factor, _ = sparse_precision_factor(
+            theta=matern_assembly.theta,
+            dirac_points=matern_assembly.dirac_points,
+            derivative_point_groups=matern_assembly.derivative_point_groups,
+            rho=rho,
+            nugget=1e-9,
+            ordering=ordering,
+        )
+        krom_matern_factors[rho] = matern_factor
         krom_build_times[rho] = time.perf_counter() - t0
         if verbose:
             print(f"    rho={rho}: build={krom_build_times[rho]:.2f}s")
@@ -1130,6 +1150,7 @@ def run_comparison(
         'pod_galerkin': {},
         'pod_deim': {},
         'krom': {},
+        'krom_matern': {},
         'fom_times': [],
     }
 
@@ -1204,47 +1225,44 @@ def run_comparison(
             print(f"    Galerkin: err={gk['mean_final_err']:.4f}  t={gk['mean_online_time']:.2f}s  blow_up={gk['blow_up_fraction']*100:.0f}%")
             print(f"    DEIM:     err={dk['mean_final_err']:.4f}  t={dk['mean_online_time']:.2f}s  blow_up={dk['blow_up_fraction']*100:.0f}%")
 
-    # ---- KROM ----
+    # ---- KROM (empirical + Matérn) ----
+    ns_cfg = kol_config.to_ns_config()
+    kx_, ky_, _ = _ns_spectral_operators(ns_cfg, dtype=dtype, device=device)
     for rho in exp_config.krom_rho_values:
         if verbose:
             print(f"\n  KROM rho={rho}...")
-        factor = krom_factors[rho]
-        krom_errs_final, krom_times = [], []
-
-        for i in range(exp_config.n_test):
-            omega0 = test_data['initial_conditions'][i]
-            truth = test_data['solutions'][i]
-            omega0_grid = omega0.clone()
-            # Compute initial derivatives via FFT
-            ns_cfg = kol_config.to_ns_config()
-            u0, v0, lap0, om_hat0, _ = compute_velocity_from_vorticity(omega0_grid, ns_cfg)
-            kx_, ky_, _ = _ns_spectral_operators(ns_cfg, dtype=dtype, device=device)
-            dx0 = torch.fft.ifft2(1j * kx_ * om_hat0).real.reshape(-1)
-            dy0 = torch.fft.ifft2(1j * ky_ * om_hat0).real.reshape(-1)
-
-            t0 = time.perf_counter()
-            krom_res = rollout_krom_kolmogorov(
-                initial_omega=omega0_grid,
-                initial_dx=dx0,
-                initial_dy=dy0,
-                initial_laplace=lap0.reshape(-1),
-                vorticity_factor=factor,
-                config=kol_config,
-                gn_steps=exp_config.krom_gn_steps,
-                gn_damping=exp_config.krom_damping,
-                cg_tol=exp_config.krom_cg_tol,
-            )
-            krom_times.append(time.perf_counter() - t0)
-            krom_errs_final.append(relative_l2(krom_res['solutions'][:, -1], truth[:, -1]))
-
-        results['krom'][rho] = {
-            'build_time': krom_build_times[rho],
-            'mean_online_time': float(np.mean(krom_times)),
-            'mean_final_err': float(np.mean(krom_errs_final)),
-        }
-        if verbose:
-            kr = results['krom'][rho]
-            print(f"    err={kr['mean_final_err']:.4f}  t={kr['mean_online_time']:.2f}s")
+        for kernel_name, factor in [('empirical', krom_factors[rho]), ('matern', krom_matern_factors[rho])]:
+            errs_final, times = [], []
+            for i in range(exp_config.n_test):
+                omega0 = test_data['initial_conditions'][i]
+                truth = test_data['solutions'][i]
+                omega0_grid = omega0.clone()
+                u0, v0, lap0, om_hat0, _ = compute_velocity_from_vorticity(omega0_grid, ns_cfg)
+                dx0 = torch.fft.ifft2(1j * kx_ * om_hat0).real.reshape(-1)
+                dy0 = torch.fft.ifft2(1j * ky_ * om_hat0).real.reshape(-1)
+                t0 = time.perf_counter()
+                krom_res = rollout_krom_kolmogorov(
+                    initial_omega=omega0_grid,
+                    initial_dx=dx0,
+                    initial_dy=dy0,
+                    initial_laplace=lap0.reshape(-1),
+                    vorticity_factor=factor,
+                    config=kol_config,
+                    gn_steps=exp_config.krom_gn_steps,
+                    gn_damping=exp_config.krom_damping,
+                    cg_tol=exp_config.krom_cg_tol,
+                )
+                times.append(time.perf_counter() - t0)
+                errs_final.append(relative_l2(krom_res['solutions'][:, -1], truth[:, -1]))
+            entry = {
+                'build_time': krom_build_times[rho],
+                'mean_online_time': float(np.mean(times)),
+                'mean_final_err': float(np.mean(errs_final)),
+            }
+            results_key = 'krom' if kernel_name == 'empirical' else 'krom_matern'
+            results[results_key][rho] = entry
+            if verbose:
+                print(f"    {kernel_name}: err={entry['mean_final_err']:.4f}  t={entry['mean_online_time']:.2f}s")
 
     results['test_solutions'] = test_data['solutions']
     results['test_ics'] = test_data['initial_conditions']

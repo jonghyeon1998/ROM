@@ -105,13 +105,13 @@ try:
     from experiments.Kolmogorov_ROM_Comparison import (
         KolmogorovConfig, ExperimentConfig, run_comparison
     )
-    kol_cfg = KolmogorovConfig(nx=32)
-    exp_cfg = ExperimentConfig(krom_rho_values=[RHO], pod_k_values=[], n_test=4)
+    kol_cfg = KolmogorovConfig(nx=32, tmax=0.5)   # 25 steps vs default 200
+    exp_cfg = ExperimentConfig(krom_rho_values=[RHO], pod_k_values=[], n_train=8, n_test=4)
     t0 = time.perf_counter()
     r = run_comparison(kol_cfg, exp_cfg, verbose=False)
     elapsed = time.perf_counter() - t0
-    krom_err = r['krom'][RHO]['mean_final_err']
-    print(f'   KROM sparse  mean rel-L2 = {krom_err:.4f}')
+    print(f'   Empirical sparse  rel-L2 = {r["krom"][RHO]["mean_final_err"]:.4f}')
+    print(f'   Matern    sparse  rel-L2 = {r["krom_matern"][RHO]["mean_final_err"]:.4f}')
     print(f'   Wall time: {elapsed:.1f}s\n')
     results['kolmogorov'] = r
 except Exception as e:
@@ -133,4 +133,8 @@ for name, key, metric in [
         emp = results[key].get('empirical_sparse', {}).get(metric, float('nan'))
         mat = results[key].get('matern_sparse',    {}).get(metric, float('nan'))
         print(f'{name:<28} {emp:>18.4f} {mat:>15.4f}')
+if 'kolmogorov' in results:
+    emp = results['kolmogorov'].get('krom', {}).get(RHO, {}).get('mean_final_err', float('nan'))
+    mat = results['kolmogorov'].get('krom_matern', {}).get(RHO, {}).get('mean_final_err', float('nan'))
+    print(f'{"Kolmogorov (nx=32)":<28} {emp:>18.4f} {mat:>15.4f}')
 print('=' * 60)

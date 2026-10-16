@@ -23,7 +23,7 @@ from .workflows import (
 PoissonSolveMethod = Literal['fft', 'kernel']
 KernelKind = Literal['empirical', 'matern']
 FactorMode = Literal['sparse', 'dense']
-AUTO_DIRECT_THRESHOLD = 2048
+AUTO_DIRECT_THRESHOLD = 4096   # NS state = 3×n_points; nx=32 gives 3×1024=3072, must exceed this
 
 
 @dataclass

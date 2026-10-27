@@ -4,7 +4,11 @@ import math
 from dataclasses import dataclass
 from typing import Tuple, Union
 
+import numpy as np
 import torch
+import scipy.sparse as sp
+import scipy.sparse.linalg as spla
+from scipy.linalg import solve_banded
 
 
 @dataclass
@@ -126,7 +130,18 @@ def burgers_crank_nicolson_rollout(
         current = interior.clone()
         for _ in range(config.newton_max_iter):
             residual, jacobian = _burgers_residual_and_jacobian(current, interior, d1, d2, config)
-            delta = torch.linalg.solve(jacobian, residual)
+            # J is tridiagonal — use banded solver (O(n)) instead of dense LU (O(n³))
+            J_np = jacobian.numpy()
+            n  = J_np.shape[0]
+            ab = np.empty((3, n), dtype=np.float64)
+            ab[0, 1:]  = np.diag(J_np,  1)   # super-diagonal
+            ab[1, :]   = np.diag(J_np,  0)   # main diagonal
+            ab[2, :-1] = np.diag(J_np, -1)   # sub-diagonal
+            ab[0, 0]   = 0.0                  # unused corner
+            ab[2, -1]  = 0.0                  # unused corner
+            delta = torch.from_numpy(
+                solve_banded((1, 1), ab, residual.numpy(), overwrite_ab=True, overwrite_b=True, check_finite=False)
+            )
             current = current - delta
             if torch.linalg.norm(delta) <= config.newton_tol * max(1.0, float(torch.linalg.norm(current))):
                 break
@@ -227,7 +242,13 @@ def solve_allen_cahn_crank_nicolson(
 
     laplacian_snapshots[0] = lap_from_interior(interior)
 
-    eye = torch.eye(interior.numel(), dtype=dtype, device=device)
+    # Convert dense Laplacian to scipy sparse once — reused across all Newton steps.
+    # J = I - dt/2*(ε²*Δ + diag(1-3u²)) is sparse (5-point stencil + diagonal).
+    lap_csr = sp.csr_matrix(laplacian.numpy())
+    n_int_total = interior.numel()
+    # Fixed part of J (constant across Newton iterations within a step): I - dt/2*ε²*Δ
+    fixed_csr = sp.eye(n_int_total, format='csr') - 0.5 * config.dt * config.epsilon**2 * lap_csr
+
     for step in range(1, n_steps):
         previous = interior.clone()
         current = previous.clone()
@@ -240,10 +261,12 @@ def solve_allen_cahn_crank_nicolson(
             residual = current - previous - 0.5 * config.dt * (
                 config.epsilon**2 * (lap_current + lap_prev) + reaction_current + reaction_prev
             )
-            jacobian = eye - 0.5 * config.dt * (
-                config.epsilon**2 * laplacian + torch.diag(1.0 - 3.0 * current.square())
-            )
-            delta = torch.linalg.solve(jacobian, residual)
+            # Sparse Newton solve: J = fixed_csr - dt/2*diag(1-3u²)
+            diag_nl = -0.5 * config.dt * (1.0 - 3.0 * current.square().numpy())
+            J_sparse = fixed_csr + sp.diags(diag_nl, format='csr')
+            delta = torch.from_numpy(
+                spla.spsolve(J_sparse, residual.numpy()).copy()
+            ).to(dtype=dtype)
             current = current - delta
             if torch.linalg.norm(delta) <= config.newton_tol * max(1.0, float(torch.linalg.norm(current))):
                 break
